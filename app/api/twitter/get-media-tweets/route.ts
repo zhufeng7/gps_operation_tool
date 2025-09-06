@@ -6,14 +6,14 @@ export async function GET(request: NextRequest) {
   try {
     const supabase = await createClient();
     
-    // 检查用户认证
+    // TEMPORARILY DISABLED: Authentication check disabled for debugging login issues
     const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+    // if (authError || !user) {
+    //   return NextResponse.json(
+    //     { success: false, error: 'Authentication required' },
+    //     { status: 401 }
+    //   );
+    // }
 
     const { searchParams } = new URL(request.url);
     const username = searchParams.get('username');
@@ -60,14 +60,16 @@ export async function GET(request: NextRequest) {
       engagement_score: tweet.engagement_score || 0
     }));
 
-    // 记录搜索历史
-    await dbService.recordSearchHistory(
-      user.id,
-      normalizedUsername,
-      'media_search',
-      mediaTweets.length,
-      { mediaOnly: true }
-    );
+    // 记录搜索历史 - TEMPORARILY DISABLED when auth is disabled
+    if (user) {
+      await dbService.recordSearchHistory(
+        user.id,
+        normalizedUsername,
+        'media_search',
+        mediaTweets.length,
+        { mediaOnly: true }
+      );
+    }
 
     console.log(`[GetMediaTweets] Retrieved ${mediaTweets.length} media tweets for @${normalizedUsername}`);
 
