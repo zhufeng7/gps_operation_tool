@@ -7,7 +7,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { SearchIcon, BarChart3Icon, ImageIcon, SparklesIcon, LoaderIcon, CheckCircleIcon } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { SearchIcon, BarChart3Icon, ImageIcon, SparklesIcon, LoaderIcon, CheckCircleIcon, CalendarIcon } from "lucide-react";
 import { ClientAuthButton } from "@/components/client-auth-button";
 
 interface FetchStatus {
@@ -21,6 +23,9 @@ export default function HomePage() {
   const [username, setUsername] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [enableTimeRange, setEnableTimeRange] = useState(false);
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>({
     stage: 'idle',
     progress: 0,
@@ -47,12 +52,27 @@ export default function HomePage() {
         details: `检查 @${normalizedUsername} 的基本信息`
       });
 
+      const requestBody: any = { username: normalizedUsername };
+
+      // 如果启用了时间范围，添加时间参数
+      if (enableTimeRange) {
+        if (startTime) requestBody.startTime = startTime;
+        if (endTime) requestBody.endTime = endTime;
+      }
+
       const response = await fetch('/api/twitter/collect-tweets', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ username: normalizedUsername }),
+        body: JSON.stringify(requestBody),
+      });
+
+      setFetchStatus({
+        stage: 'collecting',
+        progress: 50,
+        message: '正在收集推文数据...',
+        details: '连接Twitter API，获取推文数据'
       });
 
       if (!response.ok) {
@@ -60,45 +80,25 @@ export default function HomePage() {
         throw new Error(errorData.error || '数据收集失败');
       }
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
+      setFetchStatus({
+        stage: 'processing',
+        progress: 80,
+        message: '正在处理数据...',
+        details: '保存数据到数据库'
+      });
 
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      const result = await response.json();
 
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                
-                if (data.type === 'progress') {
-                  setFetchStatus(prev => ({
-                    ...prev,
-                    stage: data.stage || prev.stage,
-                    progress: data.progress || prev.progress,
-                    message: data.message || prev.message,
-                    details: data.details || prev.details
-                  }));
-                } else if (data.type === 'result') {
-                  setCollectionResult(data.data);
-                  setFetchStatus({
-                    stage: 'completed',
-                    progress: 100,
-                    message: '数据收集完成！',
-                    details: `成功收集 ${data.data.tweetsCollected || 0} 条推文`
-                  });
-                }
-              } catch (e) {
-                console.warn('Failed to parse SSE data:', line);
-              }
-            }
-          }
-        }
+      if (result.success) {
+        setCollectionResult(result.data);
+        setFetchStatus({
+          stage: 'completed',
+          progress: 100,
+          message: '数据收集完成！',
+          details: result.message || `成功收集推文数据`
+        });
+      } else {
+        throw new Error(result.error || '数据收集失败');
       }
     } catch (err: any) {
       console.error('Failed to collect tweet data:', err);
@@ -124,7 +124,7 @@ export default function HomePage() {
     }
     if (error) return `错误: ${error}`;
     if (collectionResult) {
-      return `✅ 已成功收集 @${collectionResult.username} 的 ${collectionResult.tweetsCollected} 条推文数据`;
+      return `✅ 数据收集完成`;
     }
     return "输入Twitter用户名开始收集数据";
   };
@@ -195,25 +195,80 @@ export default function HomePage() {
               </CardHeader>
               <CardContent className="relative">
                 <div className="space-y-6">
-                  <div className="flex gap-3">
-                    <div className="flex-1 relative">
-                      <Input
-                        placeholder="输入Twitter用户名 (如：elonmusk 或 @elonmusk)"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && handleFetchData()}
-                        disabled={isLoading}
-                        className="h-12 text-lg border-2 border-purple-200 focus:border-purple-400 rounded-xl bg-white/80 dark:bg-gray-700/80"
-                      />
+                  <div className="space-y-4">
+                    <div className="flex gap-3">
+                      <div className="flex-1 relative">
+                        <Input
+                          placeholder="输入Twitter用户名 (如：elonmusk 或 @elonmusk)"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          onKeyPress={(e) => e.key === 'Enter' && handleFetchData()}
+                          disabled={isLoading}
+                          className="h-12 text-lg border-2 border-purple-200 focus:border-purple-400 rounded-xl bg-white/80 dark:bg-gray-700/80"
+                        />
+                      </div>
+                      <Button
+                        onClick={handleFetchData}
+                        disabled={isLoading || !username.trim()}
+                        className="px-8 h-12 text-lg font-semibold rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl"
+                      >
+                        {isLoading ? <LoaderIcon className="h-5 w-5 animate-spin mr-2" /> : <SearchIcon className="h-5 w-5 mr-2" />}
+                        {isLoading ? '收集中' : '开始收集'}
+                      </Button>
                     </div>
-                    <Button 
-                      onClick={handleFetchData}
-                      disabled={isLoading || !username.trim()}
-                      className="px-8 h-12 text-lg font-semibold rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl"
-                    >
-                      {isLoading ? <LoaderIcon className="h-5 w-5 animate-spin mr-2" /> : <SearchIcon className="h-5 w-5 mr-2" />}
-                      {isLoading ? '收集中' : '开始收集'}
-                    </Button>
+
+                    {/* Time Range Selection */}
+                    <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center space-x-2 mb-3">
+                        <Checkbox
+                          id="enable-time-range"
+                          checked={enableTimeRange}
+                          onCheckedChange={(checked) => setEnableTimeRange(!!checked)}
+                          disabled={isLoading}
+                        />
+                        <Label htmlFor="enable-time-range" className="text-sm font-medium flex items-center gap-2">
+                          <CalendarIcon className="h-4 w-4" />
+                          指定时间范围 (限制获取200条推文)
+                        </Label>
+                      </div>
+
+                      {enableTimeRange && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <Label htmlFor="start-time" className="text-xs text-gray-600 dark:text-gray-400 mb-1 block">
+                              开始时间
+                            </Label>
+                            <Input
+                              id="start-time"
+                              type="datetime-local"
+                              value={startTime}
+                              onChange={(e) => setStartTime(e.target.value)}
+                              disabled={isLoading}
+                              className="border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="end-time" className="text-xs text-gray-600 dark:text-gray-400 mb-1 block">
+                              结束时间
+                            </Label>
+                            <Input
+                              id="end-time"
+                              type="datetime-local"
+                              value={endTime}
+                              onChange={(e) => setEndTime(e.target.value)}
+                              disabled={isLoading}
+                              className="border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {!enableTimeRange && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                          💡 不指定时间范围将获取最新的200条推文
+                        </p>
+                      )}
+                    </div>
                   </div>
                   
                   <div className="text-center space-y-4">
@@ -247,6 +302,70 @@ export default function HomePage() {
                       {!isLoading && !error && !collectionResult && <span className="text-lg">💾</span>}
                       <span>{getDataStatus()}</span>
                     </div>
+
+                    {/* Collection Result Display */}
+                    {collectionResult && (
+                      <div className="mt-6 p-4 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl border border-green-200 dark:border-green-800">
+                        <div className="flex items-center gap-2 mb-3">
+                          <CheckCircleIcon className="h-5 w-5 text-green-600" />
+                          <h3 className="font-semibold text-green-800 dark:text-green-300">收集结果详情</h3>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+                          <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-3">
+                            <div className="text-gray-600 dark:text-gray-400 mb-1">用户账号</div>
+                            <div className="font-medium text-gray-900 dark:text-gray-100">
+                              @{collectionResult.user?.username || 'N/A'}
+                            </div>
+                          </div>
+
+                          <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-3">
+                            <div className="text-gray-600 dark:text-gray-400 mb-1">推文总数</div>
+                            <div className="font-medium text-blue-600 dark:text-blue-400">
+                              {collectionResult.stats?.totalTweets || 0} 条
+                            </div>
+                          </div>
+
+                          {collectionResult.stats?.newTweetsAdded !== undefined && (
+                            <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-3">
+                              <div className="text-gray-600 dark:text-gray-400 mb-1">新增推文</div>
+                              <div className="font-medium text-purple-600 dark:text-purple-400">
+                                +{collectionResult.stats.newTweetsAdded} 条
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-3">
+                            <div className="text-gray-600 dark:text-gray-400 mb-1">数据来源</div>
+                            <div className="font-medium text-gray-700 dark:text-gray-300">
+                              {collectionResult.stats?.fromCache ? '📚 缓存数据' : '🔄 新获取'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {collectionResult.stats?.timeRange && (
+                          <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                            <div className="text-sm text-blue-700 dark:text-blue-300">
+                              📅 <strong>时间范围:</strong> {' '}
+                              {collectionResult.stats.timeRange.startTime ?
+                                new Date(collectionResult.stats.timeRange.startTime).toLocaleString() : '最早'
+                              } 至 {' '}
+                              {collectionResult.stats.timeRange.endTime ?
+                                new Date(collectionResult.stats.timeRange.endTime).toLocaleString() : '最新'
+                              }
+                            </div>
+                          </div>
+                        )}
+
+                        {collectionResult.stats?.reason && (
+                          <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
+                            <div className="text-sm text-gray-600 dark:text-gray-400">
+                              💡 <strong>说明:</strong> {collectionResult.stats.reason}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -264,7 +383,7 @@ export default function HomePage() {
               </p>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               {/* Feature 1: Media Search */}
               <Card className="group relative overflow-hidden border-0 shadow-xl hover:shadow-2xl transition-all duration-500 cursor-pointer hover:scale-[1.03] bg-gradient-to-br from-teal-50 to-blue-100 dark:from-teal-900/20 dark:to-blue-900/20 rounded-2xl flex flex-col h-full">
                 <div className="absolute inset-0 bg-gradient-to-r from-teal-400/10 to-blue-400/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
@@ -355,56 +474,6 @@ export default function HomePage() {
                 </CardContent>
               </Card>
 
-              {/* Feature 3: AI Tweet Rewriter */}
-              <Card className="group relative overflow-hidden border-0 shadow-xl hover:shadow-2xl transition-all duration-500 cursor-pointer hover:scale-[1.03] bg-gradient-to-br from-amber-50 to-orange-100 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl flex flex-col h-full">
-                <div className="absolute inset-0 bg-gradient-to-r from-amber-400/10 to-orange-400/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                <CardHeader className="relative pb-4">
-                  <CardTitle className="flex items-center gap-3 text-xl font-bold">
-                    <div className="p-2 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl shadow-lg relative">
-                      <SparklesIcon className="h-6 w-6 text-white" />
-                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-purple-500 rounded-full animate-pulse"></div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="bg-gradient-to-r from-amber-600 to-orange-600 bg-clip-text text-transparent">
-                        AI推文重写
-                      </span>
-                      <span className="text-xs bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1 rounded-full font-bold shadow-md">
-                        AI
-                      </span>
-                    </div>
-                  </CardTitle>
-                  <CardDescription className="text-base text-gray-600 dark:text-gray-300">
-                    基于数据库数据分析账号风格，智能重写推文
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="relative flex flex-col h-full">
-                  <ul className="text-sm text-muted-foreground space-y-3 mb-6 flex-grow">
-                    <li className="flex items-center gap-2">
-                      <span className="text-lg">🧠</span>
-                      历史风格学习
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="text-lg">✨</span>
-                      智能语调模仿
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="text-lg">🎨</span>
-                      多种风格选择
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="text-lg">⚡</span>
-                      一键内容重写
-                    </li>
-                  </ul>
-                  <Button 
-                    className="w-full h-11 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 mt-auto"
-                    onClick={() => handleNavigateToFeature('/ai/tweet-rewriter')}
-                  >
-                    <SparklesIcon className="mr-2 h-5 w-5" />
-                    AI重写
-                  </Button>
-                </CardContent>
-              </Card>
             </div>
           </div>
 

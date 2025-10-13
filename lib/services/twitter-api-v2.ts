@@ -4,7 +4,7 @@ export class TwitterServiceV2 {
   private client: TwitterApi;
   private requestCount: number = 0;
   private windowStartTime: number = 0;
-  private readonly MAX_REQUESTS_PER_15_MINUTES = 50; // 极保守设置：50次/15分钟，避免429错误
+  private readonly MAX_REQUESTS_PER_15_MINUTES = 250; // 调整为更合理的限制：250次/15分钟，留50次余量
   
   constructor() {
     if (!process.env.TWITTER_BEARER_TOKEN) {
@@ -159,10 +159,10 @@ export class TwitterServiceV2 {
   }
 
   /**
-   * 最大化推文数据收集 - 核心方法
-   * 采用积极的数据收集策略，尽可能获取所有可访问的历史推文
+   * 限制推文数据收集 - 核心方法
+   * 限制最多收集200条推文，避免过度消耗API配额
    */
-  async maximizeUserTweetCollection(userId: string, username: string): Promise<{
+  async maximizeUserTweetCollection(userId: string, username: string, timeRange?: { startTime?: string; endTime?: string }): Promise<{
     tweets: any[];
     metadata: {
       totalCollected: number;
@@ -176,8 +176,11 @@ export class TwitterServiceV2 {
       errors: string[];
     };
   }> {
-    console.log(`\n🚀 [TwitterAPI] Starting MAXIMUM data collection for @${username} (${userId})`);
-    console.log(`📊 [TwitterAPI] Strategy: Unlimited historical data collection`);
+    console.log(`\n🚀 [TwitterAPI] Starting LIMITED data collection for @${username} (${userId})`);
+    console.log(`📊 [TwitterAPI] Strategy: Limited to 200 tweets maximum`);
+    if (timeRange?.startTime || timeRange?.endTime) {
+      console.log(`⏰ [TwitterAPI] Time range: ${timeRange.startTime || 'earliest'} to ${timeRange.endTime || 'latest'}`);
+    }
     
     const allTweets: any[] = [];
     const allMediaIncludes: any[] = [];
@@ -188,12 +191,12 @@ export class TwitterServiceV2 {
     let hasMoreData = false;
     
     // 第一阶段：普通推文收集（无媒体过滤）
-    console.log(`\n📋 Phase 1: Collecting ALL tweets (unlimited history)`);
+    console.log(`\n📋 Phase 1: Collecting tweets (limited to 200 tweets max)`);
     
-    const maxPages = 200; // 基于280次/15分钟的限制，最多200页，留余量给其他API调用
+    const maxPages = 2; // 限制最多2页以获取200条推文（每页100条）
     let shouldStop = false; // 添加停止标志
     const tweetsPerPage = 100; // Twitter API 最大值
-    const targetTweetCount = 15000; // 提高目标到15000条推文，获取更完整的数据
+    const targetTweetCount = 200; // 限制最多获取200条推文
     let consecutiveEmptyPages = 0; // 连续空页面计数器
     const maxEmptyPages = 3; // 连续3个空页面就停止
     
@@ -240,13 +243,20 @@ export class TwitterServiceV2 {
             'author_id',
             'referenced_tweets.id',
             'referenced_tweets.id.author_id'
-          ],
-          // 不设置任何时间限制，让API自然返回历史数据
+          ]
           // exclude: ['replies'] // 暂时保留replies以获取更多数据
         };
 
         if (nextToken) {
           params.pagination_token = nextToken;
+        }
+
+        // 添加时间范围参数
+        if (timeRange?.startTime) {
+          params.start_time = timeRange.startTime;
+        }
+        if (timeRange?.endTime) {
+          params.end_time = timeRange.endTime;
         }
 
         console.log(`📄 [TwitterAPI] Collecting page ${pagesProcessed + 1}/${maxPages}...`);
@@ -406,7 +416,7 @@ export class TwitterServiceV2 {
       newestTweetDate, 
       timeSpanDays,
       hasMoreData,
-      collectionStrategy: 'maximum_unlimited_historical',
+      collectionStrategy: 'limited_200_tweets',
       rateLimitHits,
       errors
     };
@@ -504,7 +514,7 @@ export class TwitterServiceV2 {
   /**
    * 综合用户分析 - 使用最大化收集策略
    */
-  async getComprehensiveUserAnalysis(username: string): Promise<{
+  async getComprehensiveUserAnalysis(username: string, timeRange?: { startTime?: string; endTime?: string }): Promise<{
     user: any;
     tweets: any[];
     stats: {
@@ -537,7 +547,7 @@ export class TwitterServiceV2 {
     console.log(`📊 [TwitterAPI] Public metrics: ${JSON.stringify(user.public_metrics)}`);
 
     // 获取最大化推文数据
-    const tweetCollection = await this.maximizeUserTweetCollection(user.id, user.username);
+    const tweetCollection = await this.maximizeUserTweetCollection(user.id, user.username, timeRange);
     
     // 计算统计数据
     const tweets = tweetCollection.tweets;

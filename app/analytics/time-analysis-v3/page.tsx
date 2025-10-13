@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { AccountSelector } from "@/components/account-selector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { 
+import {
   BarChart3Icon,
   TrendingUpIcon,
   TrendingDownIcon,
@@ -14,7 +17,9 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   TableIcon,
-  DownloadIcon
+  DownloadIcon,
+  HomeIcon,
+  ArrowLeftIcon
 } from "lucide-react";
 import { ClientAuthButton } from "@/components/client-auth-button";
 import Web3AnalysisReport from "@/components/web3-analysis-report";
@@ -29,6 +34,7 @@ interface Tweet {
   retweet_count: number;
   reply_count: number;
   quote_count: number;
+  view_count: number;  // 新增浏览量字段
   has_media: boolean;
   engagement_score?: number;
 }
@@ -59,6 +65,12 @@ interface TimeSegment {
     followerGrowth: number;
     followerGrowthRate: number;
     keywords?: Array<{ keyword: string; frequency: number; engagement: number }>;
+    engagement: {
+      likes: { trend: 'up' | 'down' | 'stable' | 'new', percentage: number };
+      retweets: { trend: 'up' | 'down' | 'stable' | 'new', percentage: number };
+      replies: { trend: 'up' | 'down' | 'stable' | 'new', percentage: number };
+      views: { trend: 'up' | 'down' | 'stable' | 'new', percentage: number };
+    };
   };
   comparison: {
     compared_to_previous: 'up' | 'down' | 'stable' | 'new';
@@ -138,46 +150,48 @@ export default function TimeAnalysisV3Page() {
     if (!allTweets.length) return;
 
     const segments: TimeSegment[] = [];
-    const sortedTweets = [...allTweets].sort((a, b) => 
+    const sortedTweets = [...allTweets].sort((a, b) =>
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
 
     const earliestDate = new Date(sortedTweets[0].created_at);
     const latestDate = new Date(sortedTweets[sortedTweets.length - 1].created_at);
-    
+
     let currentDate = new Date(earliestDate);
     let segmentIndex = 0;
 
     while (currentDate <= latestDate) {
       let endDate: Date;
       let displayName: string;
-      
+
       switch (viewMode) {
         case 'daily':
           endDate = new Date(currentDate);
           endDate.setDate(endDate.getDate() + 1);
-          displayName = currentDate.toLocaleDateString('zh-CN', { 
-            month: 'short', 
-            day: 'numeric' 
+          displayName = currentDate.toLocaleDateString('zh-CN', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
           });
           break;
         case 'weekly':
           endDate = new Date(currentDate);
           endDate.setDate(endDate.getDate() + 7);
           const weekEnd = new Date(Math.min(endDate.getTime(), latestDate.getTime()));
-          displayName = `${currentDate.toLocaleDateString('zh-CN', { 
-            month: 'short', 
-            day: 'numeric' 
-          })}-${weekEnd.toLocaleDateString('zh-CN', { 
-            month: 'short', 
-            day: 'numeric' 
+          displayName = `${currentDate.toLocaleDateString('zh-CN', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+          })}-${weekEnd.toLocaleDateString('zh-CN', {
+            month: 'short',
+            day: 'numeric'
           })}`;
           break;
         case 'monthly':
           endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
-          displayName = currentDate.toLocaleDateString('zh-CN', { 
-            year: 'numeric', 
-            month: 'short' 
+          displayName = currentDate.toLocaleDateString('zh-CN', {
+            year: 'numeric',
+            month: 'short'
           });
           break;
         default:
@@ -205,6 +219,31 @@ export default function TimeAnalysisV3Page() {
 
       currentDate = new Date(endDate);
       segmentIndex++;
+    }
+
+    // 按时间倒序排列，使最近的时间在左边
+    segments.reverse();
+
+    // 重新计算对比数据（因为顺序改变了）
+    for (let i = 0; i < segments.length; i++) {
+      const currentSegment = segments[i];
+      const previousSegment = i < segments.length - 1 ? segments[i + 1] : null;
+
+      if (previousSegment) {
+        const currentAvgEng = currentSegment.stats.avgEngagement;
+        const prevAvgEng = previousSegment.stats.avgEngagement;
+        const growthPct = prevAvgEng > 0 ? ((currentAvgEng - prevAvgEng) / prevAvgEng) * 100 : 0;
+
+        let comparedStatus: 'up' | 'down' | 'stable' = 'stable';
+        if (growthPct > 5) comparedStatus = 'up';
+        else if (growthPct < -5) comparedStatus = 'down';
+
+        currentSegment.comparison = {
+          compared_to_previous: comparedStatus,
+          growth_percentage: Math.round(growthPct * 10) / 10,
+          insights: generateInsights(currentSegment.tweets, previousSegment.tweets)
+        };
+      }
     }
 
     setTimeSegments(segments);
@@ -266,9 +305,47 @@ export default function TimeAnalysisV3Page() {
 
     // 估算粉丝增长
     const followerGrowth = userData ? estimateFollowerGrowth(tweets, userData) : 0;
-    const followerGrowthRate = userData && userData.followers_count > 0 
-      ? (followerGrowth / userData.followers_count) * 100 
+    const followerGrowthRate = userData && userData.followers_count > 0
+      ? (followerGrowth / userData.followers_count) * 100
       : 0;
+
+    // 计算各种参与度指标的趋势
+    const calculateEngagementTrends = () => {
+      if (!previousSegment) {
+        return {
+          likes: { trend: 'new' as const, percentage: 0 },
+          retweets: { trend: 'new' as const, percentage: 0 },
+          replies: { trend: 'new' as const, percentage: 0 },
+          views: { trend: 'new' as const, percentage: 0 }
+        };
+      }
+
+      const currentLikes = tweets.reduce((sum, t) => sum + (t.like_count || 0), 0);
+      const currentRetweets = tweets.reduce((sum, t) => sum + (t.retweet_count || 0), 0);
+      const currentReplies = tweets.reduce((sum, t) => sum + (t.reply_count || 0), 0);
+      const currentViews = tweets.reduce((sum, t) => sum + (t.view_count || 0), 0);
+
+      const prevLikes = previousSegment.tweets.reduce((sum, t) => sum + (t.like_count || 0), 0);
+      const prevRetweets = previousSegment.tweets.reduce((sum, t) => sum + (t.retweet_count || 0), 0);
+      const prevReplies = previousSegment.tweets.reduce((sum, t) => sum + (t.reply_count || 0), 0);
+      const prevViews = previousSegment.tweets.reduce((sum, t) => sum + (t.view_count || 0), 0);
+
+      const calculateTrend = (current: number, previous: number) => {
+        if (previous === 0) return { trend: 'new' as const, percentage: 0 };
+        const percentage = Math.round(((current - previous) / previous) * 100 * 10) / 10;
+        let trend: 'up' | 'down' | 'stable' = 'stable';
+        if (percentage > 5) trend = 'up';
+        else if (percentage < -5) trend = 'down';
+        return { trend, percentage };
+      };
+
+      return {
+        likes: calculateTrend(currentLikes, prevLikes),
+        retweets: calculateTrend(currentRetweets, prevRetweets),
+        replies: calculateTrend(currentReplies, prevReplies),
+        views: calculateTrend(currentViews, prevViews)
+      };
+    };
 
     return {
       period,
@@ -289,7 +366,8 @@ export default function TimeAnalysisV3Page() {
       },
       trends: {
         followerGrowth: Math.round(followerGrowth),
-        followerGrowthRate: Math.round(followerGrowthRate * 10) / 10
+        followerGrowthRate: Math.round(followerGrowthRate * 10) / 10,
+        engagement: calculateEngagementTrends()
       },
       comparison
     };
@@ -505,6 +583,7 @@ export default function TimeAnalysisV3Page() {
           retweet_count: tweet.retweet_count,
           reply_count: tweet.reply_count,
           quote_count: tweet.quote_count,
+          view_count: tweet.view_count,
           has_media: tweet.has_media
         }))
       }))
@@ -539,6 +618,7 @@ export default function TimeAnalysisV3Page() {
         '点赞数',
         '转发数',
         '回复数',
+        '浏览量',
         '粉丝增长',
         '增长率(%)',
         '趋势对比',
@@ -565,6 +645,7 @@ export default function TimeAnalysisV3Page() {
         segment.tweets.reduce((sum, t) => sum + (t.like_count || 0), 0),
         segment.tweets.reduce((sum, t) => sum + (t.retweet_count || 0), 0),
         segment.tweets.reduce((sum, t) => sum + (t.reply_count || 0), 0),
+        segment.tweets.reduce((sum, t) => sum + (t.view_count || 0), 0),
         segment.trends.followerGrowth,
         segment.trends.followerGrowthRate,
         segment.comparison.compared_to_previous === 'up' ? '上升' : 
@@ -644,8 +725,9 @@ export default function TimeAnalysisV3Page() {
           '媒体占比(%)',
           '平均长度',
           '点赞数',
-          '转发数', 
+          '转发数',
           '回复数',
+          '浏览量',
           '粉丝增长',
           '增长率(%)',
           '趋势对比',
@@ -671,6 +753,7 @@ export default function TimeAnalysisV3Page() {
           segment.tweets.reduce((sum, t) => sum + (t.like_count || 0), 0),
           segment.tweets.reduce((sum, t) => sum + (t.retweet_count || 0), 0),
           segment.tweets.reduce((sum, t) => sum + (t.reply_count || 0), 0),
+          segment.tweets.reduce((sum, t) => sum + (t.view_count || 0), 0),
           segment.trends.followerGrowth,
           segment.trends.followerGrowthRate,
           segment.comparison.compared_to_previous === 'up' ? '上升' : 
@@ -699,7 +782,7 @@ export default function TimeAnalysisV3Page() {
       // 如果有详细的推文数据，创建第二个工作表
       if (timeSegments.length > 0) {
         const detailData = [
-          ['时间周期', '推文ID', '推文文本', '发布时间', '点赞', '转发', '回复', '是否含媒体'],
+          ['时间周期', '推文ID', '推文文本', '发布时间', '点赞', '转发', '回复', '浏览量', '是否含媒体'],
           ...timeSegments.flatMap(segment => 
             segment.tweets.map(tweet => [
               segment.displayName,
@@ -707,8 +790,9 @@ export default function TimeAnalysisV3Page() {
               tweet.text.slice(0, 100),
               new Date(tweet.created_at).toLocaleString('zh-CN'),
               tweet.like_count || 0,
-              tweet.retweet_count || 0, 
+              tweet.retweet_count || 0,
               tweet.reply_count || 0,
+              tweet.view_count || 0,
               tweet.has_media ? '是' : '否'
             ])
           )
@@ -740,9 +824,17 @@ export default function TimeAnalysisV3Page() {
       <div className="container mx-auto p-6 space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-primary">详细时间分析表格</h1>
-            <p className="text-muted-foreground mt-1">横向展示各个时间周期的详细运营数据和AI分析结果</p>
+          <div className="flex items-center gap-4">
+            <Link href="/">
+              <Button variant="outline" size="sm" className="flex items-center gap-2">
+                <HomeIcon className="h-4 w-4" />
+                返回首页
+              </Button>
+            </Link>
+            <div>
+              <h1 className="text-3xl font-bold text-primary">详细时间分析表格</h1>
+              <p className="text-muted-foreground mt-1">横向展示各个时间周期的详细运营数据和AI分析结果</p>
+            </div>
           </div>
           <ClientAuthButton />
         </div>
@@ -896,11 +988,9 @@ export default function TimeAnalysisV3Page() {
                       🕒 时间周期
                     </div>
                     <div className="h-20 flex items-center px-3 border-b text-xs font-medium">📊 内容统计</div>
-                    <div className="h-24 flex items-center px-3 border-b text-xs font-medium">💬 参与度分析</div>
+                    <div className="h-28 flex items-center px-3 border-b text-xs font-medium">💬 参与度分析</div>
+                    <div className="h-28 flex items-center px-3 border-b text-xs font-medium">📈 参与度趋势对比</div>
                     <div className="h-24 flex items-center px-3 border-b text-xs font-medium">📝 内容分析</div>
-                    <div className="h-20 flex items-center px-3 border-b text-xs font-medium">🌟 发布时机</div>
-                    <div className="h-24 flex items-center px-3 border-b text-xs font-medium">📈 趋势对比</div>
-                    <div className="h-24 flex items-center px-3 border-b text-xs font-medium">🎯 运营建议</div>
                     <div className="h-28 flex items-center px-3 text-xs font-medium">❤️ 最佳表现</div>
                   </div>
 
@@ -932,7 +1022,7 @@ export default function TimeAnalysisV3Page() {
                       </div>
 
                       {/* 参与度分析行 */}
-                      <div className="h-24 border-b px-2 py-2 text-xs space-y-1.5">
+                      <div className="h-28 border-b px-2 py-2 text-xs space-y-1">
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">❤️ 点赞:</span>
                           <span className="font-medium text-red-500">{formatNumber(segment.tweets.reduce((sum, t) => sum + (t.like_count || 0), 0))}</span>
@@ -946,8 +1036,85 @@ export default function TimeAnalysisV3Page() {
                           <span className="font-medium text-blue-500">{formatNumber(segment.tweets.reduce((sum, t) => sum + (t.reply_count || 0), 0))}</span>
                         </div>
                         <div className="flex justify-between">
+                          <span className="text-muted-foreground">👁️ 浏览:</span>
+                          <span className="font-medium text-purple-500">{formatNumber(segment.tweets.reduce((sum, t) => sum + (t.view_count || 0), 0))}</span>
+                        </div>
+                        <div className="flex justify-between">
                           <span className="text-muted-foreground">平均互动:</span>
                           <span className="font-medium text-purple-600">{formatNumber(segment.stats.avgEngagement)}</span>
+                        </div>
+                      </div>
+
+                      {/* 参与度趋势对比行 */}
+                      <div className="h-28 border-b px-2 py-2 text-xs">
+                        <div className="space-y-1.5">
+                          {/* 点赞趋势 */}
+                          <div className="flex justify-between items-center">
+                            <span className="text-muted-foreground">❤️ 点赞:</span>
+                            <div className="flex items-center gap-1">
+                              {segment.trends.engagement.likes.trend === 'up' && <TrendingUpIcon className="h-3 w-3 text-green-500" />}
+                              {segment.trends.engagement.likes.trend === 'down' && <TrendingDownIcon className="h-3 w-3 text-red-500" />}
+                              {segment.trends.engagement.likes.trend === 'stable' && <MinusIcon className="h-3 w-3 text-yellow-500" />}
+                              <span className={`font-medium text-xs ${
+                                segment.trends.engagement.likes.percentage > 0 ? 'text-green-600' :
+                                segment.trends.engagement.likes.percentage < 0 ? 'text-red-600' : 'text-yellow-600'
+                              }`}>
+                                {segment.trends.engagement.likes.trend === 'new' ? '首期' :
+                                  `${segment.trends.engagement.likes.percentage > 0 ? '+' : ''}${segment.trends.engagement.likes.percentage}%`}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* 转发趋势 */}
+                          <div className="flex justify-between items-center">
+                            <span className="text-muted-foreground">🔄 转发:</span>
+                            <div className="flex items-center gap-1">
+                              {segment.trends.engagement.retweets.trend === 'up' && <TrendingUpIcon className="h-3 w-3 text-green-500" />}
+                              {segment.trends.engagement.retweets.trend === 'down' && <TrendingDownIcon className="h-3 w-3 text-red-500" />}
+                              {segment.trends.engagement.retweets.trend === 'stable' && <MinusIcon className="h-3 w-3 text-yellow-500" />}
+                              <span className={`font-medium text-xs ${
+                                segment.trends.engagement.retweets.percentage > 0 ? 'text-green-600' :
+                                segment.trends.engagement.retweets.percentage < 0 ? 'text-red-600' : 'text-yellow-600'
+                              }`}>
+                                {segment.trends.engagement.retweets.trend === 'new' ? '首期' :
+                                  `${segment.trends.engagement.retweets.percentage > 0 ? '+' : ''}${segment.trends.engagement.retweets.percentage}%`}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* 回复趋势 */}
+                          <div className="flex justify-between items-center">
+                            <span className="text-muted-foreground">💬 回复:</span>
+                            <div className="flex items-center gap-1">
+                              {segment.trends.engagement.replies.trend === 'up' && <TrendingUpIcon className="h-3 w-3 text-green-500" />}
+                              {segment.trends.engagement.replies.trend === 'down' && <TrendingDownIcon className="h-3 w-3 text-red-500" />}
+                              {segment.trends.engagement.replies.trend === 'stable' && <MinusIcon className="h-3 w-3 text-yellow-500" />}
+                              <span className={`font-medium text-xs ${
+                                segment.trends.engagement.replies.percentage > 0 ? 'text-green-600' :
+                                segment.trends.engagement.replies.percentage < 0 ? 'text-red-600' : 'text-yellow-600'
+                              }`}>
+                                {segment.trends.engagement.replies.trend === 'new' ? '首期' :
+                                  `${segment.trends.engagement.replies.percentage > 0 ? '+' : ''}${segment.trends.engagement.replies.percentage}%`}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* 浏览量趋势 */}
+                          <div className="flex justify-between items-center">
+                            <span className="text-muted-foreground">👁️ 浏览:</span>
+                            <div className="flex items-center gap-1">
+                              {segment.trends.engagement.views.trend === 'up' && <TrendingUpIcon className="h-3 w-3 text-green-500" />}
+                              {segment.trends.engagement.views.trend === 'down' && <TrendingDownIcon className="h-3 w-3 text-red-500" />}
+                              {segment.trends.engagement.views.trend === 'stable' && <MinusIcon className="h-3 w-3 text-yellow-500" />}
+                              <span className={`font-medium text-xs ${
+                                segment.trends.engagement.views.percentage > 0 ? 'text-green-600' :
+                                segment.trends.engagement.views.percentage < 0 ? 'text-red-600' : 'text-yellow-600'
+                              }`}>
+                                {segment.trends.engagement.views.trend === 'new' ? '首期' :
+                                  `${segment.trends.engagement.views.percentage > 0 ? '+' : ''}${segment.trends.engagement.views.percentage}%`}
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </div>
 
@@ -969,98 +1136,6 @@ export default function TimeAnalysisV3Page() {
                             <div>请稍候</div>
                           </div>
                         )}
-                      </div>
-
-                      {/* 发布时机行 */}
-                      <div className="h-20 border-b px-2 py-2 text-xs">
-                        <div className="space-y-1">
-                          <div className="text-orange-600 font-semibold">🕒 最活时间:</div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">最佳时间:</span>
-                            <span className="font-medium text-orange-600">
-                              {segment.tweets.length > 0 ? 
-                                new Date(segment.tweets[0].created_at).getHours() + ':00' : 
-                                '22:00'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">最活跃日:</span>
-                            <span className="font-medium">
-                              {segment.tweets.length > 0 ? 
-                                ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date(segment.tweets[0].created_at).getDay()] : 
-                                'Monday'}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 趋势对比行 */}
-                      <div className="h-24 border-b px-2 py-2 text-xs">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1 mb-1">
-                            {segment.comparison.compared_to_previous === 'up' && (
-                              <>
-                                <TrendingUpIcon className="h-3 w-3 text-green-500" />
-                                <span className="text-green-600 font-medium">上升</span>
-                              </>
-                            )}
-                            {segment.comparison.compared_to_previous === 'down' && (
-                              <>
-                                <TrendingDownIcon className="h-3 w-3 text-red-500" />
-                                <span className="text-red-600 font-medium">下降</span>
-                              </>
-                            )}
-                            {segment.comparison.compared_to_previous === 'stable' && (
-                              <>
-                                <MinusIcon className="h-3 w-3 text-yellow-500" />
-                                <span className="text-yellow-600 font-medium">稳定</span>
-                              </>
-                            )}
-                            {segment.comparison.compared_to_previous === 'new' && (
-                              <Badge variant="secondary" className="text-xs">首期数据</Badge>
-                            )}
-                          </div>
-                          
-                          {segment.comparison.growth_percentage !== 0 && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">增长率:</span>
-                              <span className={`font-medium ${
-                                segment.comparison.growth_percentage > 0 ? 'text-green-600' : 'text-red-600'
-                              }`}>
-                                {segment.comparison.growth_percentage > 0 ? '+' : ''}{segment.comparison.growth_percentage}%
-                              </span>
-                            </div>
-                          )}
-
-                          <div className="text-xs text-muted-foreground mb-1">对比说明:</div>
-                          <div className="text-xs text-gray-600 bg-blue-50 dark:bg-blue-900/20 p-1 rounded">
-                            相比上一{viewMode === 'monthly' ? '月' : viewMode === 'weekly' ? '周' : '日'}互动表现
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 策略建议行 */}
-                      <div className="h-24 border-b px-2 py-2 text-xs">
-                        <div className="space-y-1">
-                          <div className="text-indigo-600 font-semibold mb-1">💡 优化建议:</div>
-                          <div className="space-y-1">
-                            {segment.comparison.insights.slice(0, 2).map((insight, idx) => (
-                              <div key={idx} className="text-xs text-foreground bg-blue-50 dark:bg-blue-950/20 px-1 py-0.5 rounded">
-                                • {insight}
-                              </div>
-                            ))}
-                          </div>
-                          
-                          <div className="flex justify-between mt-2">
-                            <span className="text-muted-foreground">预估增长:</span>
-                            <span className={`font-medium ${
-                              segment.trends.followerGrowth > 0 ? 'text-green-600' : 
-                              segment.trends.followerGrowth < 0 ? 'text-red-600' : 'text-gray-600'
-                            }`}>
-                              {segment.trends.followerGrowth > 0 ? '+' : ''}{formatNumber(segment.trends.followerGrowth)}
-                            </span>
-                          </div>
-                        </div>
                       </div>
 
                       {/* 最佳表现行 */}

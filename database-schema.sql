@@ -32,6 +32,7 @@ CREATE TABLE tweets (
   retweet_count INTEGER DEFAULT 0,
   reply_count INTEGER DEFAULT 0,
   quote_count INTEGER DEFAULT 0,
+  view_count INTEGER DEFAULT 0,  -- 新增浏览量字段
   engagement_score FLOAT DEFAULT 0,
   has_media BOOLEAN DEFAULT false,
   media_data JSONB,
@@ -84,6 +85,7 @@ CREATE INDEX idx_tweets_twitter_user_id ON tweets(twitter_user_id);
 CREATE INDEX idx_tweets_tweet_id ON tweets(tweet_id);
 CREATE INDEX idx_tweets_created_at ON tweets(created_at DESC);
 CREATE INDEX idx_tweets_engagement_score ON tweets(engagement_score DESC);
+CREATE INDEX idx_tweets_view_count ON tweets(view_count DESC);  -- 新增浏览量索引
 CREATE INDEX idx_tweets_has_media ON tweets(has_media);
 CREATE INDEX idx_collection_sessions_user_id ON collection_sessions(user_id);
 CREATE INDEX idx_collection_sessions_username ON collection_sessions(username);

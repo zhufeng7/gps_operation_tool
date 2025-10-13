@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { username } = body;
+    const { username, startTime, endTime } = body;
 
     if (!username || typeof username !== 'string') {
       return NextResponse.json(
@@ -28,24 +28,96 @@ export async function POST(request: NextRequest) {
 
     // 统一处理用户名（移除@，转小写）
     const normalizedUsername = username.trim().toLowerCase().replace(/^@/, '');
-    
+
+    // 处理时间参数
+    const timeRange = {
+      startTime: startTime ? new Date(startTime).toISOString() : undefined,
+      endTime: endTime ? new Date(endTime).toISOString() : undefined
+    };
+
     console.log(`[CollectTweets] Starting collection for @${normalizedUsername}`);
+    if (timeRange.startTime || timeRange.endTime) {
+      console.log(`[CollectTweets] Time range: ${timeRange.startTime || 'earliest'} to ${timeRange.endTime || 'latest'}`);
+    }
 
     // 初始化服务
     const twitterService = new TwitterServiceV2();
     const dbService = new DatabaseService(supabase);
     
-    // 检查用户是否已存在以及最后收集时间
+    // 检查用户是否已存在以及数据覆盖情况
     const existingUser = await dbService.checkUserExists(normalizedUsername);
-    const shouldRefresh = !existingUser || shouldRefreshData(existingUser);
-    
-    if (!shouldRefresh && existingUser) {
+
+    // 检查时间范围内的数据覆盖情况
+    const coverage = await dbService.checkTimeRangeCoverage(
+      normalizedUsername,
+      timeRange.startTime,
+      timeRange.endTime
+    );
+
+    console.log(`[CollectTweets] Data coverage for @${normalizedUsername}:`, {
+      hasData: coverage.hasData,
+      count: coverage.count,
+      timeRange: timeRange
+    });
+
+    // 决定是否需要获取新数据
+    let shouldFetch = false;
+    let reason = '';
+
+    if (!existingUser) {
+      shouldFetch = true;
+      reason = '用户不存在，需要获取数据';
+    } else if (timeRange.startTime || timeRange.endTime) {
+      // 指定了时间范围
+      if (!coverage.hasData || coverage.count < 50) { // 如果指定时间范围内数据不足50条，则获取新数据
+        shouldFetch = true;
+        reason = `指定时间范围内数据不足 (${coverage.count} 条)，需要补充数据`;
+      } else {
+        reason = `指定时间范围内已有足够数据 (${coverage.count} 条)`;
+      }
+    } else {
+      // 没有指定时间范围，使用原有的48小时策略
+      const shouldRefresh = shouldRefreshData(existingUser);
+      if (shouldRefresh) {
+        shouldFetch = true;
+        reason = '数据已过期（超过48小时），需要更新';
+      } else {
+        reason = '数据仍在有效期内（48小时内）';
+      }
+    }
+
+    console.log(`[CollectTweets] Decision: ${shouldFetch ? 'FETCH' : 'USE_EXISTING'} - ${reason}`);
+
+    if (!shouldFetch) {
       // 返回已存在的数据
-      const tweets = await dbService.getUserTweets(normalizedUsername);
+      let tweets;
+      if (timeRange.startTime || timeRange.endTime) {
+        // 如果指定了时间范围，返回该时间范围的数据
+        let query = supabase
+          .from('tweets_with_user')
+          .select('*')
+          .eq('username', normalizedUsername);
+
+        if (timeRange.startTime) {
+          query = query.gte('created_at', timeRange.startTime);
+        }
+        if (timeRange.endTime) {
+          query = query.lte('created_at', timeRange.endTime);
+        }
+
+        const { data } = await query
+          .order('created_at', { ascending: false })
+          .limit(200);
+
+        tweets = data || [];
+      } else {
+        tweets = await dbService.getUserTweets(normalizedUsername);
+      }
+
       const userStats = await dbService.getUserStats(normalizedUsername);
-      
+
       console.log(`[CollectTweets] Using existing data for @${normalizedUsername}: ${tweets.length} tweets`);
-      
+
       return NextResponse.json({
         success: true,
         message: '使用已存储的数据',
@@ -54,7 +126,8 @@ export async function POST(request: NextRequest) {
           tweets: tweets,
           stats: {
             totalTweets: tweets.length,
-            fromCache: true
+            fromCache: true,
+            reason: reason
           }
         }
       });
@@ -64,11 +137,15 @@ export async function POST(request: NextRequest) {
     let sessionId: string | null = null;
     let twitterUserId: string | null = null;
 
+    // 记录获取前的数据数量，用于计算新增数据
+    const beforeTweets = await dbService.getUserTweets(normalizedUsername);
+    const beforeCount = beforeTweets.length;
+
     try {
       console.log(`[CollectTweets] Fetching fresh data for @${normalizedUsername}`);
       
       // 获取用户信息和推文
-      const result = await twitterService.getComprehensiveUserAnalysis(normalizedUsername);
+      const result = await twitterService.getComprehensiveUserAnalysis(normalizedUsername, timeRange);
       
       if (!result.user) {
         return NextResponse.json(
@@ -122,6 +199,7 @@ export async function POST(request: NextRequest) {
         retweet_count: tweet.public_metrics?.retweet_count || 0,
         reply_count: tweet.public_metrics?.reply_count || 0,
         quote_count: tweet.public_metrics?.quote_count || 0,
+        view_count: tweet.public_metrics?.impression_count || 0,  // 添加浏览量数据
         has_media: Boolean(tweet.media && tweet.media.length > 0),
         media_data: tweet.media || null,
         entities: tweet.entities || null,
@@ -168,20 +246,44 @@ export async function POST(request: NextRequest) {
       // 获取最新的用户统计
       const userStats = await dbService.getUserStats(normalizedUsername);
       const allTweets = await dbService.getUserTweets(normalizedUsername);
+      const afterCount = allTweets.length;
+      const newTweetsAdded = afterCount - beforeCount;
 
       console.log(`[CollectTweets] Successfully collected ${tweets.length} tweets for @${normalizedUsername}`);
+      console.log(`[CollectTweets] Database: ${beforeCount} → ${afterCount} tweets (+${newTweetsAdded} new)`);
+
+      // 根据时间范围和新增数据情况生成消息
+      let message = '';
+      if (timeRange.startTime || timeRange.endTime) {
+        if (newTweetsAdded > 0) {
+          message = `成功补充 ${newTweetsAdded} 条指定时间范围的推文`;
+        } else {
+          message = `指定时间范围内的数据已完整，无需补充`;
+        }
+      } else {
+        if (newTweetsAdded > 0) {
+          message = `成功收集 ${tweets.length} 条推文，新增 ${newTweetsAdded} 条`;
+        } else {
+          message = `成功收集 ${tweets.length} 条推文`;
+        }
+      }
 
       return NextResponse.json({
         success: true,
-        message: `成功收集 ${tweets.length} 条推文`,
+        message: message,
         data: {
           user: userStats,
           tweets: allTweets,
           stats: {
             totalTweets: allTweets.length,
             newTweets: tweets.length,
+            newTweetsAdded: newTweetsAdded,
             timeSpanDays: timeSpanDays,
-            fromCache: false
+            fromCache: false,
+            timeRange: timeRange.startTime || timeRange.endTime ? {
+              startTime: timeRange.startTime,
+              endTime: timeRange.endTime
+            } : null
           },
           session: {
             id: sessionId,
@@ -255,13 +357,26 @@ export async function POST(request: NextRequest) {
 
 // 判断是否需要刷新数据（48小时策略）
 function shouldRefreshData(existingUser: any): boolean {
-  if (!existingUser || !existingUser.updated_at) return true;
-  
+  if (!existingUser) {
+    console.log('[shouldRefreshData] No existing user found, will fetch new data');
+    return true;
+  }
+
+  if (!existingUser.updated_at) {
+    console.log('[shouldRefreshData] No updated_at field found, will fetch new data');
+    return true;
+  }
+
   const lastUpdate = new Date(existingUser.updated_at);
   const now = new Date();
   const hoursDiff = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60);
-  
-  return hoursDiff >= 48; // 48小时后刷新
+
+  console.log(`[shouldRefreshData] Last update: ${lastUpdate.toISOString()}, Hours since: ${hoursDiff.toFixed(2)}`);
+
+  const shouldRefresh = hoursDiff >= 48; // 48小时后刷新
+  console.log(`[shouldRefreshData] Should refresh: ${shouldRefresh}`);
+
+  return shouldRefresh;
 }
 
 export async function OPTIONS() {

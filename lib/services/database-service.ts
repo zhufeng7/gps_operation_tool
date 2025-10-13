@@ -25,6 +25,7 @@ export interface Tweet {
   retweet_count?: number;
   reply_count?: number;
   quote_count?: number;
+  view_count?: number;
   engagement_score?: number;
   has_media?: boolean;
   media_data?: any;
@@ -126,6 +127,7 @@ export class DatabaseService {
             retweet_count: tweet.retweet_count || 0,
             reply_count: tweet.reply_count || 0,
             quote_count: tweet.quote_count || 0,
+            view_count: tweet.view_count || 0,
             engagement_score: (tweet.like_count || 0) + (tweet.retweet_count || 0) + (tweet.reply_count || 0),
             has_media: tweet.has_media || false,
             media_data: tweet.media_data,
@@ -338,10 +340,10 @@ export class DatabaseService {
   async checkUserExists(username: string) {
     try {
       const normalizedUsername = username.toLowerCase().replace(/^@/, '');
-      
+
       const { data, error } = await this.supabase
         .from('twitter_users')
-        .select('id, username, collected_tweets_count')
+        .select('id, username, updated_at')
         .eq('username', normalizedUsername)
         .single();
 
@@ -354,6 +356,70 @@ export class DatabaseService {
     } catch (error) {
       console.error('Database error in checkUserExists:', error);
       return null;
+    }
+  }
+
+  /**
+   * 检查用户在指定时间范围内的数据覆盖情况
+   */
+  async checkTimeRangeCoverage(username: string, startTime?: string, endTime?: string) {
+    try {
+      const normalizedUsername = username.toLowerCase().replace(/^@/, '');
+
+      // 如果没有指定时间范围，检查是否有任何数据
+      if (!startTime && !endTime) {
+        const { data, error } = await this.supabase
+          .from('tweets_with_user')
+          .select('created_at')
+          .eq('username', normalizedUsername)
+          .order('created_at', { ascending: false })
+          .limit(200);
+
+        if (error) {
+          console.error('Error checking data coverage:', error);
+          return { hasData: false, count: 0, oldestDate: null, newestDate: null };
+        }
+
+        return {
+          hasData: data && data.length > 0,
+          count: data?.length || 0,
+          oldestDate: data && data.length > 0 ? data[data.length - 1].created_at : null,
+          newestDate: data && data.length > 0 ? data[0].created_at : null
+        };
+      }
+
+      // 构建查询条件
+      let query = this.supabase
+        .from('tweets_with_user')
+        .select('created_at')
+        .eq('username', normalizedUsername);
+
+      if (startTime) {
+        query = query.gte('created_at', startTime);
+      }
+      if (endTime) {
+        query = query.lte('created_at', endTime);
+      }
+
+      const { data, error } = await query
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      if (error) {
+        console.error('Error checking time range coverage:', error);
+        return { hasData: false, count: 0, oldestDate: null, newestDate: null };
+      }
+
+      return {
+        hasData: data && data.length > 0,
+        count: data?.length || 0,
+        oldestDate: data && data.length > 0 ? data[data.length - 1].created_at : null,
+        newestDate: data && data.length > 0 ? data[0].created_at : null
+      };
+
+    } catch (error) {
+      console.error('Database error in checkTimeRangeCoverage:', error);
+      return { hasData: false, count: 0, oldestDate: null, newestDate: null };
     }
   }
 

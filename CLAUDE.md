@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-这是一个基于 Next.js 15 + Supabase 的全栈 Web 应用程序模板，使用 App Router 架构，包含完整的身份验证系统。
+这是一个基于 Next.js 15 + Supabase 的GPS运营工具全栈应用程序，使用 App Router 架构，集成了Twitter API、OpenAI API和完整的身份验证系统。主要功能包括Twitter数据收集与分析、AI内容分析和时间序列分析。
 
 ## 开发命令
 
@@ -55,7 +55,9 @@ middleware.ts        # 路由保护中间件
 ### 必需的环境变量
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your-project-url
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY=your-anon-key  # 注意：实际使用时可能是 ANON_KEY
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY=your-anon-key
+TWITTER_BEARER_TOKEN=your-twitter-bearer-token  # Twitter API Bearer Token
+OPENAI_API_KEY=your-openai-api-key  # OpenAI API Key (通过代码推断需要)
 ```
 
 ### 重要提醒
@@ -92,3 +94,47 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY=your-anon-key  # 注意：实际使
 - TypeScript 配置完整，包含严格类型检查
 - ESLint 配置使用 Next.js 推荐规则
 - 支持 PostCSS 和 Autoprefixer
+
+## 应用功能模块
+
+### Twitter 数据收集与分析
+- **API路由**: `/api/twitter/*` - Twitter数据收集相关接口
+- **核心服务**: `lib/services/twitter-api-v2.ts` - Twitter API v2 客户端
+- **功能页面**: `/media-search` - 媒体搜索功能
+- **数据库**: 完整的Twitter用户和推文数据模型 (见 `database-schema.sql`)
+
+### AI 内容分析
+- **API路由**: `/api/ai/*` - AI分析相关接口，包括：
+  - `/api/ai/rewrite-tweet` - 推文重写
+  - `/api/ai/analyze-style` - 风格分析
+  - `/api/ai/content-classification` - 内容分类
+  - `/api/ai/keyword-trends` - 关键词趋势分析
+- **功能页面**: `/ai/tweet-rewriter` - 推文重写工具
+
+### 数据分析与可视化
+- **时间序列分析**: `/analytics/time-analysis-v2` 和 `/analytics/time-analysis-v3`
+- **数据库服务**: `lib/services/database-service.ts` - 数据库操作服务
+- **缓存系统**: `lib/cache-v2.ts` - 缓存管理
+
+### 数据库架构
+- **Twitter用户表**: 存储Twitter用户基本信息、统计数据
+- **推文表**: 存储推文内容、互动数据、媒体信息
+- **关系设计**: 用户与推文的外键关联，支持级联删除
+- **JSON字段**: 媒体数据、实体标注、上下文注释等结构化存储
+
+## 技术架构要点
+
+### API 设计模式
+- 统一的错误处理和响应格式
+- 基于路由文件夹的RESTful API设计
+- 集成第三方API（Twitter、OpenAI）的代理层
+
+### 服务层设计
+- `lib/services/` 目录下的服务类负责业务逻辑
+- Twitter API封装：处理认证、限流、数据转换
+- 数据库服务：提供数据访问抽象层
+
+### 缓存策略
+- 实现了v2版本的缓存系统
+- 支持数据缓存和API响应缓存
+- 优化高频数据访问性能
