@@ -157,7 +157,29 @@ export default function TimeAnalysisV3Page() {
     const earliestDate = new Date(sortedTweets[0].created_at);
     const latestDate = new Date(sortedTweets[sortedTweets.length - 1].created_at);
 
-    let currentDate = new Date(earliestDate);
+    // 获取周一的辅助函数
+    const getMondayOfWeek = (date: Date) => {
+      const d = new Date(date);
+      const day = d.getDay(); // 0是周日，1是周一，...6是周六
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      return new Date(d.setDate(diff));
+    };
+
+    // 根据视图模式调整起始日期
+    let currentDate: Date;
+    if (viewMode === 'weekly') {
+      // 周视图：从最早推文所在周的周一开始
+      currentDate = getMondayOfWeek(earliestDate);
+      currentDate.setHours(0, 0, 0, 0);
+    } else if (viewMode === 'monthly') {
+      // 月视图：从最早推文所在月的月初开始
+      currentDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth(), 1);
+      currentDate.setHours(0, 0, 0, 0);
+    } else {
+      currentDate = new Date(earliestDate);
+      currentDate.setHours(0, 0, 0, 0);
+    }
+
     let segmentIndex = 0;
 
     while (currentDate <= latestDate) {
@@ -168,6 +190,7 @@ export default function TimeAnalysisV3Page() {
         case 'daily':
           endDate = new Date(currentDate);
           endDate.setDate(endDate.getDate() + 1);
+          endDate.setHours(0, 0, 0, 0);
           displayName = currentDate.toLocaleDateString('zh-CN', {
             year: 'numeric',
             month: 'short',
@@ -175,20 +198,22 @@ export default function TimeAnalysisV3Page() {
           });
           break;
         case 'weekly':
+          // 周一到周日
           endDate = new Date(currentDate);
-          endDate.setDate(endDate.getDate() + 7);
-          const weekEnd = new Date(Math.min(endDate.getTime(), latestDate.getTime()));
+          endDate.setDate(endDate.getDate() + 6); // 周日
+          endDate.setHours(23, 59, 59, 999);
           displayName = `${currentDate.toLocaleDateString('zh-CN', {
-            year: 'numeric',
             month: 'short',
             day: 'numeric'
-          })}-${weekEnd.toLocaleDateString('zh-CN', {
+          })}-${endDate.toLocaleDateString('zh-CN', {
             month: 'short',
             day: 'numeric'
           })}`;
           break;
         case 'monthly':
-          endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+          // 月初到月末
+          endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+          endDate.setHours(23, 59, 59, 999);
           displayName = currentDate.toLocaleDateString('zh-CN', {
             year: 'numeric',
             month: 'short'
@@ -202,7 +227,7 @@ export default function TimeAnalysisV3Page() {
 
       const segmentTweets = sortedTweets.filter(tweet => {
         const tweetDate = new Date(tweet.created_at);
-        return tweetDate >= currentDate && tweetDate < endDate;
+        return tweetDate >= currentDate && tweetDate <= endDate;
       });
 
       if (segmentTweets.length > 0) {
@@ -217,7 +242,18 @@ export default function TimeAnalysisV3Page() {
         segments.push(segment);
       }
 
-      currentDate = new Date(endDate);
+      // 递增到下一个时间段
+      if (viewMode === 'weekly') {
+        // 跳到下周一
+        currentDate.setDate(currentDate.getDate() + 7);
+      } else if (viewMode === 'monthly') {
+        // 跳到下个月的月初
+        currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+        currentDate.setHours(0, 0, 0, 0);
+      } else {
+        // 日视图：跳到下一天
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
       segmentIndex++;
     }
 
@@ -717,7 +753,7 @@ export default function TimeAnalysisV3Page() {
         [
           '时间周期',
           '开始日期',
-          '结束日期', 
+          '结束日期',
           '推文数量',
           '平均互动',
           '总互动',
@@ -725,9 +761,13 @@ export default function TimeAnalysisV3Page() {
           '媒体占比(%)',
           '平均长度',
           '点赞数',
+          '点赞环比(%)',
           '转发数',
+          '转发环比(%)',
           '回复数',
+          '回复环比(%)',
           '浏览量',
+          '浏览环比(%)',
           '粉丝增长',
           '增长率(%)',
           '趋势对比',
@@ -751,16 +791,20 @@ export default function TimeAnalysisV3Page() {
           Math.round(segment.content.mediaPercentage * 10) / 10,
           segment.content.avgLength,
           segment.tweets.reduce((sum, t) => sum + (t.like_count || 0), 0),
+          segment.trends.engagement.likes.trend === 'new' ? '首期' : segment.trends.engagement.likes.percentage,
           segment.tweets.reduce((sum, t) => sum + (t.retweet_count || 0), 0),
+          segment.trends.engagement.retweets.trend === 'new' ? '首期' : segment.trends.engagement.retweets.percentage,
           segment.tweets.reduce((sum, t) => sum + (t.reply_count || 0), 0),
+          segment.trends.engagement.replies.trend === 'new' ? '首期' : segment.trends.engagement.replies.percentage,
           segment.tweets.reduce((sum, t) => sum + (t.view_count || 0), 0),
+          segment.trends.engagement.views.trend === 'new' ? '首期' : segment.trends.engagement.views.percentage,
           segment.trends.followerGrowth,
           segment.trends.followerGrowthRate,
-          segment.comparison.compared_to_previous === 'up' ? '上升' : 
+          segment.comparison.compared_to_previous === 'up' ? '上升' :
           segment.comparison.compared_to_previous === 'down' ? '下降' :
           segment.comparison.compared_to_previous === 'stable' ? '稳定' : '首期',
           segment.comparison.growth_percentage,
-          segment.content.aiClassification ? 
+          segment.content.aiClassification ?
             Object.entries(segment.content.aiClassification.categories)
               .slice(0, 3)
               .map(([cat, count]) => `${cat}:${count}`)
@@ -779,27 +823,141 @@ export default function TimeAnalysisV3Page() {
       // 添加到工作簿
       XLSX.utils.book_append_sheet(wb, ws, '时间分析数据');
       
-      // 如果有详细的推文数据，创建第二个工作表
-      if (timeSegments.length > 0) {
-        const detailData = [
-          ['时间周期', '推文ID', '推文文本', '发布时间', '点赞', '转发', '回复', '浏览量', '是否含媒体'],
-          ...timeSegments.flatMap(segment => 
-            segment.tweets.map(tweet => [
-              segment.displayName,
-              tweet.id,
-              tweet.text.slice(0, 100),
-              new Date(tweet.created_at).toLocaleString('zh-CN'),
-              tweet.like_count || 0,
-              tweet.retweet_count || 0,
-              tweet.reply_count || 0,
-              tweet.view_count || 0,
-              tweet.has_media ? '是' : '否'
-            ])
-          )
+      // 第二个工作表：推文原始数据
+      if (allTweets.length > 0) {
+        const tweetData = [
+          ['推文ID', '推文文本', '发布时间', '点赞', '转发', '回复', '引用', '浏览量', '是否含媒体'],
+          ...allTweets.map(tweet => [
+            tweet.id,
+            tweet.text,
+            new Date(tweet.created_at).toLocaleString('zh-CN'),
+            tweet.like_count || 0,
+            tweet.retweet_count || 0,
+            tweet.reply_count || 0,
+            tweet.quote_count || 0,
+            tweet.view_count || 0,
+            tweet.has_media ? '是' : '否'
+          ])
         ];
-        
-        const detailWs = XLSX.utils.aoa_to_sheet(detailData);
-        XLSX.utils.book_append_sheet(wb, detailWs, '详细推文数据');
+
+        const tweetWs = XLSX.utils.aoa_to_sheet(tweetData);
+        XLSX.utils.book_append_sheet(wb, tweetWs, '推文原始数据');
+      }
+
+      // 第三个工作表：按照特定格式组织（时间在行上，垂直展示）
+      if (timeSegments.length > 0) {
+        const formattedData: any[][] = [];
+
+        // 表头行（根据视图模式显示不同的环比类型）
+        const periodType = viewMode === 'weekly' ? '周环比' : viewMode === 'monthly' ? '月环比' : '日环比';
+        formattedData.push(['周期', '数据统计', periodType, '备注']);
+
+        // 为每个时间周期创建多行数据
+        timeSegments.forEach((seg, index) => {
+          // 格式化环比数据的辅助函数
+          const formatTrend = (trendData: { trend: 'up' | 'down' | 'stable' | 'new', percentage: number }) => {
+            if (trendData.trend === 'new') {
+              return '首期';
+            }
+            const trend = trendData.trend === 'up' ? '↑' :
+                         trendData.trend === 'down' ? '↓' : '→';
+            return `${trend} ${trendData.percentage}%`;
+          };
+
+          // 计算推文数量的环比（基于真实推文数量，不是平均互动）
+          let tweetCountComparison = '';
+          // timeSegments是倒序的，所以前一个时段是index+1
+          const previousSeg = index < timeSegments.length - 1 ? timeSegments[index + 1] : null;
+
+          if (!previousSeg) {
+            tweetCountComparison = '首期';
+          } else {
+            const currentCount = seg.stats.totalTweets;
+            const previousCount = previousSeg.stats.totalTweets;
+
+            if (previousCount === 0) {
+              tweetCountComparison = currentCount > 0 ? '↑ 100%' : '首期';
+            } else {
+              const growthPct = ((currentCount - previousCount) / previousCount) * 100;
+              const roundedPct = Math.round(growthPct * 10) / 10;
+
+              let trend = '→';
+              if (growthPct > 5) trend = '↑';
+              else if (growthPct < -5) trend = '↓';
+
+              tweetCountComparison = `${trend} ${roundedPct}%`;
+            }
+          }
+
+          // 获取内容类型
+          let contentType = 'AI分析中...';
+          if (seg.content.aiClassification) {
+            contentType = Object.entries(seg.content.aiClassification.categories)
+              .slice(0, 3)
+              .map(([cat, count]) => `${cat}:${count}`)
+              .join('; ');
+          }
+
+          // 获取最佳Post
+          let bestPost = '暂无';
+          if (seg.stats.topTweet) {
+            bestPost = `${seg.stats.topTweet.text.slice(0, 50)}... (❤️${seg.stats.topTweet.like_count} 🔄${seg.stats.topTweet.retweet_count})`;
+          }
+
+          // 第一行：时间周期 + 推文数量 + 周环比（使用真实的推文数量环比）
+          formattedData.push([
+            seg.displayName,
+            `推文数量: ${seg.stats.totalTweets}`,
+            tweetCountComparison,
+            ''
+          ]);
+
+          // 后续行：各项数据指标及其对应的环比
+          formattedData.push([
+            '',
+            `❤️ 点赞: ${seg.tweets.reduce((sum, t) => sum + (t.like_count || 0), 0)}`,
+            formatTrend(seg.trends.engagement.likes),
+            ''
+          ]);
+
+          formattedData.push([
+            '',
+            `🔄 转发: ${seg.tweets.reduce((sum, t) => sum + (t.retweet_count || 0), 0)}`,
+            formatTrend(seg.trends.engagement.retweets),
+            ''
+          ]);
+
+          formattedData.push([
+            '',
+            `💬 回复: ${seg.tweets.reduce((sum, t) => sum + (t.reply_count || 0), 0)}`,
+            formatTrend(seg.trends.engagement.replies),
+            ''
+          ]);
+
+          formattedData.push([
+            '',
+            `👁️ 浏览: ${seg.tweets.reduce((sum, t) => sum + (t.view_count || 0), 0)}`,
+            formatTrend(seg.trends.engagement.views),
+            ''
+          ]);
+
+          formattedData.push([
+            '',
+            `内容类型: ${contentType}`,
+            '',
+            ''
+          ]);
+
+          formattedData.push([
+            '',
+            `最佳Post: ${bestPost}`,
+            '',
+            ''
+          ]);
+        });
+
+        const formattedWs = XLSX.utils.aoa_to_sheet(formattedData);
+        XLSX.utils.book_append_sheet(wb, formattedWs, '运营数据汇总');
       }
 
       // 导出文件

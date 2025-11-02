@@ -441,11 +441,26 @@ export default function TimeAnalysisV2Page() {
         }
       }
     } else if (mode === 'weekly') {
-      // 按周分组
+      // 按周分组（周一到周日）
+      // 获取当前日期所在周的周一
+      const getMondayOfWeek = (date: Date) => {
+        const d = new Date(date);
+        const day = d.getDay(); // 0是周日，1是周一，...6是周六
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // 如果是周日，需要往回推6天
+        return new Date(d.setDate(diff));
+      };
+
+      const currentMonday = getMondayOfWeek(now);
+      currentMonday.setHours(0, 0, 0, 0);
+
       for (let i = 0; i < 12; i++) {
-        const startDate = new Date(now.getTime() - (i * 7 * 24 * 60 * 60 * 1000));
+        // 从当前周的周一开始往回推
+        const startDate = new Date(currentMonday);
+        startDate.setDate(startDate.getDate() - (i * 7));
         startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(startDate.getTime() + (6 * 24 * 60 * 60 * 1000));
+
+        const endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + 6); // 周日
         endDate.setHours(23, 59, 59, 999);
 
         const weekTweets = tweets.filter(tweet => {
@@ -454,9 +469,10 @@ export default function TimeAnalysisV2Page() {
         });
 
         if (weekTweets.length > 0) {
+          const weekNumber = Math.floor((startDate.getTime() - new Date(startDate.getFullYear(), 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000)) + 1;
           groups.push({
             period: `week-${i}`,
-            displayName: `第${i + 1}周 (${startDate.getMonth() + 1}/${startDate.getDate()})`,
+            displayName: `${startDate.getMonth() + 1}月${startDate.getDate()}日-${endDate.getMonth() + 1}月${endDate.getDate()}日`,
             startDate: startDate.toISOString(),
             endDate: endDate.toISOString(),
             tweets: weekTweets
